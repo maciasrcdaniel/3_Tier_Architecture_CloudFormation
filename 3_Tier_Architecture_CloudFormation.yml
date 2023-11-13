@@ -1,0 +1,574 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploy a 3-tier architecture with VPC for LUIT project
+
+# PARAMETER VARIABLES
+Parameters:
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+    Default: luit-3-tier
+
+  KeyPair: 
+    Description: SSH key pair to use
+    Type: String
+    Default: LUIT_KEYS.pem
+
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.10.0.0/16
+
+  WebSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.10.1.0/24
+
+  WebSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the second Availability Zone
+    Type: String
+    Default: 10.10.2.0/24
+
+  AppSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the first Availability Zone
+    Type: String
+    Default: 10.10.3.0/24
+
+  AppSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.10.4.0/24
+
+  DatabaseSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.10.5.0/24
+
+  DatabaseSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.10.6.0/24
+
+  BastionSubnetCIDR: 
+    Description: Please enter the IP range for the bastion host
+    Type: String
+    Default: 10.10.7.0/24
+  
+  MasterUsername:
+    Description: RDS Master Password for testing
+    Type: String
+    Default: admin
+
+  MasterUserPassword:
+    NoEcho: true
+    Description: RDS Master password for testing
+    Type: String
+    MinLength: 12
+    AllowedPattern: "[a-zA-Z0-9!?]*"
+    ConstraintDescription: Upper and lower characters only
+
+Resources:
+  # CREATE THE VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  # MAIN INTERNET GATEWAY
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  # CREATE THE ATTACHMENT BETWEEN THE INTERNET GATEWAY AND THE VPC        
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VpcCIDR
+      InternetGatewayId: !Ref InternetGateway
+
+
+  ##### CREATE SUBNETS #####
+
+  # CREATE THE WEB PUBLIC SUBNETS
+  WebPublicSubnet1: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref WebSubnet1CIDR
+      AvailabilityZone: us-east-1a
+      MapPublicIpOnLaunch: true
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-web-subnet-1a
+
+  WebPublicSubnet2: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref WebSubnet2CIDR
+      AvailabilityZone: us-east-1b
+      MapPublicIpOnLaunch: true
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-web-subnet-1b
+
+  # CREATE APP PRIVATE SUBNETS
+  AppPrivateSubnet1: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref AppSubnet1CIDR
+      AvailabilityZone: us-east-1a
+      MapPublicIpOnLaunch: false
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-app-subnet-1a
+
+  AppPrivateSubnet2: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref AppSubnet2CIDR
+      AvailabilityZone: us-east-1b
+      MapPublicIpOnLaunch: false
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-app-subnet-1b 
+
+  # CREATE DATA PRIVATE SUBNETS
+  DBPrivateSubnet1: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref DatabaseSubnet1CIDR
+      AvailabilityZone: us-east-1a
+      MapPublicIpOnLaunch: false
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-app-subnet-1a
+
+  DBPrivateSubnet2: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref DatabaseSubnet2CIDR
+      AvailabilityZone: us-east-1b
+      MapPublicIpOnLaunch: false
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-app-subnet-1b     
+
+  # CREATE BASTION PUBLIC SUBNET
+  BastionPublic: 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref BastionSubnetCIDR
+      AvailabilityZone: us-east-1c
+      MapPublicIpOnLaunch: true
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-Bastion-Subnet
+
+  # CREATE THE WEB ROUTE TABLE
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-route-table
+      VpcId: !Ref VPC
+
+  # CREATE THE MAIN ROUTE INTO THE WEB TIER
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref WebRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # CREATE THE NAT GATEWAY AND ATTACH THE NAT ELASTIC IP
+  ElasticNATIP:
+    Type: AWS::EC2::EIP
+    Properties: 
+      Domain: vpc
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-NATElasticIP
+
+  # CREATE NAT GATEWAY 
+  NatGateway: 
+    Type: AWS::EC2::NatGateway
+    DependsOn: WebPublicSubnet1
+    Properties:
+      AllocationId: !Ref ElasticNATIP
+      SubnetId: !Ref WebPublicSubnet1
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-NATGateway-Main
+
+  # CREATE PUBLIC ROUTE TABLE ASSOCIATIONS
+  WebPublicSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: PublicRoute
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref WebPublicSubnet1
+
+  WebPublicSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: PublicRoute
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref WebPublicSubnet2
+
+  # CREATE PRIVATE ROUTE TABLE
+  PrivateRouteTable: 
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-route-table
+
+  # CREATE PRIVATE ROUTE
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # CREATE PRIVATE ROUTE ASSOCIATION 
+  AppPrivateSubnet1RouteAssocation: 
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: PrivateRoute
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref AppPrivateSubnet1
+  
+  AppPrivateSubnet2RouteAssociation: 
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: PrivateRoute
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref AppPrivateSubnet2
+
+  DatabasePrivateSubnet1RouteAssociation: 
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: PrivateRoute
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref DBPrivateSubnet1
+
+  DatabasePrivateSubnet2RouteAssociation: 
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: PrivateRoute
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref DBPrivateSubnet2
+
+# SECURITY GROUPS
+
+  # BASTION SECURITY GROUP
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${EnvironmentName}-BastionSecurityGroup
+      GroupDescription: SSH access from your machine
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  # ALB WEB SECURITY GROUP
+  ALBWebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${EnvironmentName}-ALBWebSecurityGroup
+      GroupDescription: Allow http traffic from internet to ALB for web
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  # GENEREAL WEB SECURITY GROUP TO ALLOW TRAFFIC FORM ALB WEB SECURITY GROUP
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: BastionSecurityGroup
+    Properties: 
+      SourceSecurityGroupId: !Ref ALBWebSecurityGroup
+      GroupName: !Sub ${EnvironmentName}-WebSecurityGroup
+      GroupDescription: Web Security group allowing traffic from the web tier load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+      
+  # ALB APP SECURITY GROUP
+  ALBAppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      SourceSecurityGroupId: !Ref WebSecurityGroup
+      GroupName: !Sub ${EnvironmentName}-ALBAppSecurityGroup
+      GroupDescription: Allow traffic from the WebSecurity Group to the app load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          
+  # GENERAL APP SECURITY GROUP TO ALLOW TRAFFIC FROM THE ALB SECURITY GROUP TO THE APP TIER
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: WebSecurityGroup
+    Properties: 
+      SourceSecurityGroupId: !Ref ALBAppSecurityGroup
+      GroupName: !Sub ${EnvironmentName}-AppSecurityGroup
+      GroupDescription: Allow traffic from app ALB to the App tier via http and ssh
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+        - IpProtocol:: tcp
+          FromPort: 22
+          ToPort: 22
+
+  # DATABASE BASE SECURITY GROUP TO ALLOW SSH TRAFFIC FROM THE APPSECURITYGROUP INTO THE DATABASE TIER
+  DBSecurityGroup: 
+    Type: AWS::RDS::DBSecurityGroup
+    Properties:
+      DBSecurityGroupIngress: 
+        - EC2SecurityGroupId: !Ref AppSecurityGroup
+        - EC2SecurityGroupId: !Ref BastionSecurityGroup
+      EC2VpcId: !Ref VPC
+      GroupDescription: Database tier securiy group
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-DatabaseSecurityGroup
+
+
+  
+    
+  # CREATE A LAUNCH TEMPLATE FOR WEB TO ASSOCIATE A PUBLIC ADDRESS
+  WebLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${EnvironmentName}-Web-Launch-Template
+      LaunchTemplateData:
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+        ImageId: ami-05c13eab67c5d8861
+        InstanceType: t2.micro
+        KeyName: LUIT_KEYS.pem
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            sudo yum update -y
+            sudo yum install httpd -y
+            sudo systemctl start httpd
+            sudo systemctl enable httpd
+        SecurityGroups: !Ref WebSecurityGroup
+
+  # CREATE A LAUNCH TEMPLATE FOR APP TIER TO ASSOCIATE WITH PRIVATE TIER
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${EnvironmentName}-App-Launch-Template
+      LaunchTemplateData:
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: false
+        ImageId: ami-05c13eab67c5d8861
+        InstanceType: t2.micro
+        KeyName: LUIT_KEYS.pem
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            sudo yum update -y
+            sudo yum install httpd -y
+            sudo systemctl start httpd
+            sudo systemctl enable httpd
+        SecurityGroups: !Ref AppSecurityGroup
+
+  # CREATE THE WEB ALB
+  WebAppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Name: !Sub ${EnvironmentName}-Web-Load-Balancer
+      Type: application
+      IpAddressType: ipv4
+      Scheme: internet-facing
+      SecurityGroups: !Ref ALBWebSecurityGroup
+      Subnets:
+        - !Ref WebPublicSubnet1
+        - !Ref WebPublicSubnet2
+
+  # CREATE THE WEB TARGET GROUP
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-Web-Target-Group
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckPath: /
+
+  # CREATE THE WEB HTTP LISTENER
+  WebHTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn: WebTargetGroup
+    Properties:
+      LoadBalancerArn: !Ref WebAppLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+
+  # CREATE THE WEB AUTO SCALING GROUP
+  WebASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${EnvironmentName}-WebASG
+      LaunchConfigurationName: !Ref WebLaunchTemplate
+      MinSize: 2
+      MaxSize: 5
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref WebTargetGroup
+      VPCZoneIdentifier:
+        - !Ref WebPublicSubnet1
+        - !Ref WebPublicSubnet2
+
+  # CREATE THE APP LOAD BALANCER
+  AppAppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${EnvironmentName}-App-Load-Balancer
+      Type: application
+      IpAddressType: ipv4
+      Scheme: internal
+      SecurityGroups: !Ref ALBAppSecurityGroup
+      Subnets:
+        - !Ref AppPrivateSubnet1
+        - !Ref AppPrivateSubnet2
+
+  # CREATE THE APP TARGET GROUP
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-App-Target-Group
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckPath: /
+
+  # CREATE APP HTTP LISTENER
+  AppHTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AppAppLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+
+  # CREATE THE APP AUTOSCALING GROUP
+  AppASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${EnvironmentName}-AppASG
+      LaunchConfigurationName: !Ref AppLaunchTemplate
+      MinSize: 2
+      MaxSize: 5
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !Ref AppTargetGroup
+      VPCZoneIdentifier:
+        - !Ref AppPrivateSubnet1
+        - !Ref AppPrivateSubnet2
+
+  # CREATE THE RDS SUBNET GROUP TO ATTACH TO THE DATABASE
+  RDSSubnetGroup: 
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group specifically for RDS
+      DBSubnetGroupName: !Sub ${EnvironmentName}-DB-Subnet-Group
+      SubnetIds: 
+        - !Ref DBPrivateSubnet1
+        - !Ref DBPrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-DB-Subnet-Group
+
+  # CREATE THE RDS DATABASE
+  RDSDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: mysql
+      EngineVersion: 8.0.30
+      DBInstanceIdentifier: !Sub ${EnvironmentName}-DB-Identifier
+      DBSecurityGroups: 
+        - !Ref DBSecurityGroup
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterUserPassword
+      DBInstanceClass: db.t2.small
+      MultiAZ: true
+      AllocatedStorage: 20
+    
+  # BASTION HOST
+  Bastion:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-05c13eab67c5d8861
+      KeyName: LUIT_KEYS.pem
+      InstanceType: t2.micro
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          AssociatePublicIpAddress: true
+          SubnetId: !Ref BastionPublic
+          GroupSet: !Ref BastionSecurityGroup
+      Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-Bastion
+      UserData: 
+        Fn::Base64: 
+          !Sub |
+            #!/bin/bash
+            sudo yum update -y
+            sudo yum install -y nmap
+            sudo yum install -y mysql
+# OUTPUT SECTIONS
+  BastionIP: 
+    Description: Bastion IP
+    Value: !GetAtt BastionHost.PublicIp
+  
+  WebPublicIP: 
+    Description: Public Web IP 
+    Value: !GetAtt WebPublicSubnet1.PublicIp
+
+  
